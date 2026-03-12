@@ -98,7 +98,7 @@ export default function EditorRoom() {
         if (ws.readyState === WebSocket.OPEN) {
           try { ws.send(JSON.stringify({ type: 'pong' })); } catch(e) {}
         }
-      }, 15000);
+      }, 10000);
     };
 
     ws.onmessage = (event) => {

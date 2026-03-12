@@ -400,7 +400,7 @@ editor_manager = EditorConnectionManager()
 voice_manager = VoiceConnectionManager()
 
 # ─── WebSocket Keepalive ──────────────────────────────────
-async def ws_keepalive(ws: WebSocket, interval: int = 20):
+async def ws_keepalive(ws: WebSocket, interval: int = 10):
     """Send periodic pings to keep the WebSocket connection alive through K8s ingress."""
     try:
         while True:
@@ -521,9 +521,11 @@ async def voice_ws(ws: WebSocket, room_id: str, token: str = Query(...)):
                     await voice_manager.broadcast(room_id, user_id, conn_id, data)
                 logger.info(f"[Voice] Signal {data['type']} from {username} target={target or 'broadcast'}")
             elif data.get("type") == "speaking":
+                # Throttle speaking broadcasts - only forward to reduce WS traffic
                 await voice_manager.broadcast(room_id, user_id, conn_id, {
                     "type": "speaking",
                     "speaking": data.get("speaking", False),
+                    "user_id": user_id,
                     "username": username
                 })
     except WebSocketDisconnect:

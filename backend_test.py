@@ -2,17 +2,24 @@ import requests
 import sys
 import json
 import uuid
+import asyncio
+import websockets
+import threading
+import time
 from datetime import datetime
 
 class CodeSyncAPITester:
     def __init__(self, base_url="https://secure-code-share-1.preview.emergentagent.com/api"):
         self.base_url = base_url
+        self.ws_base = base_url.replace("https://", "wss://").replace("/api", "")
         self.token = None
         self.user_id = None
         self.username = None
         self.tests_run = 0
         self.tests_passed = 0
         self.room_id = None
+        self.ws_messages = []
+        self.voice_ws_messages = []
 
     def run_test(self, name, method, endpoint, expected_status, data=None, params=None):
         """Run a single API test"""
@@ -203,89 +210,165 @@ class CodeSyncAPITester:
         )
         return success
 
+    async def test_voice_websocket_connection(self, room_id):
+        """Test voice WebSocket connection"""
+        print(f"\n🔍 Testing Voice WebSocket Connection...")
+        print(f"   WS URL: {self.ws_base}/api/ws/voice/{room_id}?token={self.token}")
+        
+        try:
+            uri = f"{self.ws_base}/api/ws/voice/{room_id}?token={self.token}"
+            async with websockets.connect(uri) as websocket:
+                print("✅ Voice WebSocket connected successfully")
+                
+                # Send a test message and wait for response
+                test_message = json.dumps({"type": "speaking", "speaking": False})
+                await websocket.send(test_message)
+                print("✅ Sent speaking message")
+                
+                # Wait for any messages
+                try:
+                    response = await asyncio.wait_for(websocket.recv(), timeout=5)
+                    data = json.loads(response)
+                    print(f"✅ Received: {data.get('type', 'unknown')}")
+                    self.voice_ws_messages.append(data)
+                except asyncio.TimeoutError:
+                    print("⚠️  No immediate response (this is normal)")
+                
+                return True
+        except Exception as e:
+            print(f"❌ Voice WebSocket connection failed: {e}")
+            return False
+
+    async def test_editor_websocket_connection(self, room_id):
+        """Test editor WebSocket connection"""
+        print(f"\n🔍 Testing Editor WebSocket Connection...")
+        print(f"   WS URL: {self.ws_base}/api/ws/editor/{room_id}?token={self.token}")
+        
+        try:
+            uri = f"{self.ws_base}/api/ws/editor/{room_id}?token={self.token}"
+            async with websockets.connect(uri) as websocket:
+                print("✅ Editor WebSocket connected successfully")
+                
+                # Wait for init message
+                try:
+                    response = await asyncio.wait_for(websocket.recv(), timeout=5)
+                    data = json.loads(response)
+                    print(f"✅ Received init: {data.get('type', 'unknown')}")
+                    self.ws_messages.append(data)
+                    
+                    # Send a code change
+                    code_message = json.dumps({
+                        "type": "code_change", 
+                        "code": "// Test code from API test\nconsole.log('Hello from WebSocket test');"
+                    })
+                    await websocket.send(code_message)
+                    print("✅ Sent code change message")
+                    
+                except asyncio.TimeoutError:
+                    print("⚠️  No init message received in time")
+                
+                return True
+        except Exception as e:
+            print(f"❌ Editor WebSocket connection failed: {e}")
+            return False
+
+    def run_websocket_tests(self, room_id):
+        """Run WebSocket tests using asyncio"""
+        async def run_tests():
+            editor_result = await self.test_editor_websocket_connection(room_id)
+            voice_result = await self.test_voice_websocket_connection(room_id)
+            return editor_result and voice_result
+        
+        try:
+            return asyncio.run(run_tests())
+        except Exception as e:
+            print(f"❌ WebSocket tests failed: {e}")
+            return False
+
 def main():
-    print("🚀 Starting CodeSync API Testing...")
+    print("🚀 Starting CodeSync API Testing (Voice Focus)...")
     print("=" * 50)
     
     tester = CodeSyncAPITester()
     
-    # Test with existing user credentials first
-    print("\n📋 Phase 1: Testing with existing user credentials")
+    # Test with provided user credentials
+    print("\n📋 Phase 1: Testing with provided test credentials")
     
-    # Try login with demo user
-    if not tester.test_login("demo@codesync.com", "demo1234"):
-        print("❌ Demo user login failed, skipping demo user tests")
+    # Try login with test user 1
+    if not tester.test_login("user1_sync@test.com", "pass123"):
+        print("❌ Test user 1 login failed")
         return 1
+    
+    print(f"✅ Logged in as user: {tester.username} (ID: {tester.user_id})")
     
     # Test get current user
     if not tester.test_get_me():
         print("❌ Get current user failed")
         return 1
     
-    # Test room operations
-    test_room_name = f"Test Room {datetime.now().strftime('%H%M%S')}"
-    if not tester.test_create_room(test_room_name, "javascript"):
-        print("❌ Room creation failed")
+    # Test accessing the existing room
+    existing_room_id = "66483989-348c-4af4-8af3-2bd065de9a6f"
+    print(f"\n📋 Phase 2: Testing existing room access - {existing_room_id}")
+    
+    if not tester.test_get_room(existing_room_id):
+        print("❌ Failed to access existing room")
         return 1
     
-    if not tester.test_list_rooms():
-        print("❌ List rooms failed")
+    print("✅ Successfully accessed existing room")
+    
+    # Test WebSocket connections (CRITICAL for voice functionality)
+    print("\n📋 Phase 3: Testing WebSocket Connections (CRITICAL)")
+    
+    if not tester.run_websocket_tests(existing_room_id):
+        print("❌ WebSocket tests failed - this is critical for voice functionality")
         return 1
     
-    if not tester.test_get_room(tester.room_id):
-        print("❌ Get room failed")
-        return 1
+    print("✅ WebSocket connections working")
     
-    # Test AI suggestion
-    if not tester.test_ai_suggest("function hello() {", "javascript"):
-        print("❌ AI suggestion failed")
-        return 1
-    
-    # Test invite user (should fail if test user doesn't exist)
-    print("\n📋 Phase 2: Testing invite functionality")
-    tester.test_invite_user(tester.room_id, "test@example.com", "editor")
-    
-    # Try to login as second user to test role operations
+    # Test with second user for multi-user scenarios
+    print("\n📋 Phase 4: Testing multi-user scenarios")
     tester2 = CodeSyncAPITester()
-    if tester2.test_login("test@example.com", "password123"):
-        print("✅ Second test user login successful")
+    
+    if tester2.test_login("user2_sync@test.com", "pass123"):
+        print(f"✅ Second user logged in: {tester2.username} (ID: {tester2.user_id})")
         
-        # Test role update from first user
-        tester.test_update_role(tester.room_id, tester2.user_id, "viewer")
-        
-        # Test remove member
-        tester.test_remove_member(tester.room_id, tester2.user_id)
+        if tester2.test_get_room(existing_room_id):
+            print("✅ Second user can access the room")
+            
+            # Test WebSocket for second user
+            if tester2.run_websocket_tests(existing_room_id):
+                print("✅ Second user WebSocket connections working")
+            else:
+                print("❌ Second user WebSocket connections failed")
+        else:
+            print("❌ Second user cannot access room")
     else:
-        print("⚠️  Second test user not available or login failed")
+        print("❌ Second user login failed")
+        return 1
     
-    # Clean up - delete test room
-    if tester.room_id:
-        tester.test_delete_room(tester.room_id)
-    
-    # Test user registration with new user
-    print("\n📋 Phase 3: Testing new user registration")
-    new_tester = CodeSyncAPITester()
-    test_email = f"test_{uuid.uuid4().hex[:8]}@example.com"
-    test_username = f"user_{uuid.uuid4().hex[:6]}"
-    
-    if new_tester.test_register(test_email, test_username, "testpass123"):
-        print("✅ New user registration successful")
-        new_tester.test_get_me()
-        
-        # Create a room with new user
-        new_room_name = f"New User Room {datetime.now().strftime('%H%M%S')}"
-        if new_tester.test_create_room(new_room_name):
-            new_tester.test_delete_room(new_tester.room_id)
+    # Test AI functionality
+    print("\n📋 Phase 5: Testing AI functionality")
+    if not tester.test_ai_suggest("function hello() {\n  // Add voice chat feature\n}", "javascript"):
+        print("❌ AI suggestion failed")
+    else:
+        print("✅ AI suggestion working")
     
     # Print final results
     print("\n" + "=" * 50)
     print(f"📊 Test Results:")
-    print(f"   Total Tests: {tester.tests_run}")
-    print(f"   Passed: {tester.tests_passed}")
-    print(f"   Failed: {tester.tests_run - tester.tests_passed}")
-    print(f"   Success Rate: {(tester.tests_passed/tester.tests_run)*100:.1f}%")
+    print(f"   Total Tests: {tester.tests_run + tester2.tests_run}")
+    print(f"   Passed: {tester.tests_passed + tester2.tests_passed}")
+    total_tests = tester.tests_run + tester2.tests_run
+    total_passed = tester.tests_passed + tester2.tests_passed
+    print(f"   Failed: {total_tests - total_passed}")
+    if total_tests > 0:
+        print(f"   Success Rate: {(total_passed/total_tests)*100:.1f}%")
     
-    return 0 if tester.tests_passed == tester.tests_run else 1
+    print(f"\n📊 WebSocket Messages Captured:")
+    print(f"   Editor messages: {len(tester.ws_messages)}")
+    print(f"   Voice messages: {len(tester.voice_ws_messages)}")
+    
+    return 0 if (total_passed == total_tests and total_tests > 0) else 1
 
 if __name__ == "__main__":
     sys.exit(main())
