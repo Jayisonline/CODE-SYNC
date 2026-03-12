@@ -2,44 +2,84 @@ import React, { useEffect, useRef, useState, useCallback } from 'react';
 import { Button } from '../components/ui/button';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Mic, MicOff, PhoneOff, Phone, Volume2 } from 'lucide-react';
+import { toast } from 'sonner';
 
-const ICE_SERVERS = [{ urls: 'stun:stun.l.google.com:19302' }];
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+  { urls: 'stun:stun2.l.google.com:19302' },
+  { urls: 'stun:stun3.l.google.com:19302' },
+  { urls: 'stun:stun4.l.google.com:19302' },
+];
+
+const WS_BASE = process.env.REACT_APP_BACKEND_URL.replace(/^http/, 'ws');
 
 export function VoicePanel({ roomId, token, userId, username }) {
   const [joined, setJoined] = useState(false);
   const [muted, setMuted] = useState(false);
   const [voiceUsers, setVoiceUsers] = useState([]);
   const [speakingUsers, setSpeakingUsers] = useState({});
+  const [connecting, setConnecting] = useState(false);
+  
   const wsRef = useRef(null);
   const peersRef = useRef({});
   const localStreamRef = useRef(null);
   const audioContextRef = useRef(null);
-  const analyserRef = useRef(null);
   const speakingTimerRef = useRef(null);
+  const heartbeatTimerRef = useRef(null);
+  const mountedRef = useRef(true);
+  const remoteAudiosRef = useRef({});
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      cleanup();
+    };
+  }, []);
 
   const cleanup = useCallback(() => {
+    if (heartbeatTimerRef.current) {
+      clearInterval(heartbeatTimerRef.current);
+      heartbeatTimerRef.current = null;
+    }
+    if (speakingTimerRef.current) {
+      clearInterval(speakingTimerRef.current);
+      speakingTimerRef.current = null;
+    }
+    if (audioContextRef.current) {
+      try { audioContextRef.current.close(); } catch(e) {}
+      audioContextRef.current = null;
+    }
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(t => t.stop());
       localStreamRef.current = null;
     }
-    Object.values(peersRef.current).forEach(pc => pc.close());
+    Object.values(peersRef.current).forEach(pc => {
+      try { pc.close(); } catch(e) {}
+    });
     peersRef.current = {};
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.close();
+    // Clean up audio elements
+    Object.values(remoteAudiosRef.current).forEach(audio => {
+      try { audio.pause(); audio.srcObject = null; } catch(e) {}
+    });
+    remoteAudiosRef.current = {};
+    if (wsRef.current) {
+      try { wsRef.current.close(); } catch(e) {}
+      wsRef.current = null;
     }
-    wsRef.current = null;
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
+    if (mountedRef.current) {
+      setVoiceUsers([]);
+      setSpeakingUsers({});
     }
-    if (speakingTimerRef.current) {
-      clearInterval(speakingTimerRef.current);
-    }
-    setVoiceUsers([]);
-    setSpeakingUsers({});
   }, []);
 
   const createPeer = useCallback((targetId, initiator) => {
+    // Close existing peer if any
+    if (peersRef.current[targetId]) {
+      try { peersRef.current[targetId].close(); } catch(e) {}
+    }
+
     const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
     peersRef.current[targetId] = pc;
 
@@ -59,23 +99,38 @@ export function VoicePanel({ roomId, token, userId, username }) {
       }
     };
 
+    pc.oniceconnectionstatechange = () => {
+      console.log(`[Voice] ICE state for ${targetId}: ${pc.iceConnectionState}`);
+      if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        // Try to restart ICE
+        if (initiator && pc.restartIce) {
+          pc.restartIce();
+        }
+      }
+    };
+
     pc.ontrack = (e) => {
+      console.log(`[Voice] Got remote track from ${targetId}`);
       const audio = new Audio();
+      audio.autoplay = true;
       audio.srcObject = e.streams[0];
-      audio.play().catch(() => {});
+      audio.play().catch(err => console.error('[Voice] Audio play error:', err));
+      remoteAudiosRef.current[targetId] = audio;
     };
 
     if (initiator) {
-      pc.createOffer().then(offer => {
-        pc.setLocalDescription(offer);
-        if (wsRef.current?.readyState === WebSocket.OPEN) {
-          wsRef.current.send(JSON.stringify({
-            type: 'offer',
-            target_id: targetId,
-            sdp: offer.sdp
-          }));
-        }
-      });
+      pc.createOffer({ offerToReceiveAudio: true })
+        .then(offer => pc.setLocalDescription(offer))
+        .then(() => {
+          if (wsRef.current?.readyState === WebSocket.OPEN) {
+            wsRef.current.send(JSON.stringify({
+              type: 'offer',
+              target_id: targetId,
+              sdp: pc.localDescription.sdp
+            }));
+          }
+        })
+        .catch(err => console.error('[Voice] Offer error:', err));
     }
 
     return pc;
@@ -83,85 +138,150 @@ export function VoicePanel({ roomId, token, userId, username }) {
 
   const setupSpeakingDetection = useCallback((stream) => {
     try {
-      audioContextRef.current = new (window.AudioContext || window.webkitAudioContext)();
-      const source = audioContextRef.current.createMediaStreamSource(stream);
-      analyserRef.current = audioContextRef.current.createAnalyser();
-      analyserRef.current.fftSize = 512;
-      source.connect(analyserRef.current);
+      const ctx = new (window.AudioContext || window.webkitAudioContext)();
+      audioContextRef.current = ctx;
+      const source = ctx.createMediaStreamSource(stream);
+      const analyser = ctx.createAnalyser();
+      analyser.fftSize = 512;
+      source.connect(analyser);
 
-      const dataArray = new Uint8Array(analyserRef.current.frequencyBinCount);
+      const dataArray = new Uint8Array(analyser.frequencyBinCount);
       speakingTimerRef.current = setInterval(() => {
-        if (!analyserRef.current) return;
-        analyserRef.current.getByteFrequencyData(dataArray);
+        if (!mountedRef.current) return;
+        analyser.getByteFrequencyData(dataArray);
         const avg = dataArray.reduce((a, b) => a + b, 0) / dataArray.length;
         const isSpeaking = avg > 20;
         if (wsRef.current?.readyState === WebSocket.OPEN) {
           wsRef.current.send(JSON.stringify({ type: 'speaking', speaking: isSpeaking }));
         }
-      }, 200);
+      }, 250);
     } catch (e) {
-      console.error('Speaking detection error:', e);
+      console.error('[Voice] Speaking detection error:', e);
     }
   }, []);
 
   const joinVoice = async () => {
+    if (connecting) return;
+    setConnecting(true);
+    
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: {
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true
+        }
+      });
       localStreamRef.current = stream;
       setupSpeakingDetection(stream);
 
-      const wsUrl = process.env.REACT_APP_BACKEND_URL.replace(/^http/, 'ws');
-      const ws = new WebSocket(`${wsUrl}/api/ws/voice/${roomId}?token=${token}`);
+      const ws = new WebSocket(`${WS_BASE}/api/ws/voice/${roomId}?token=${token}`);
       wsRef.current = ws;
 
+      ws.onopen = () => {
+        if (!mountedRef.current) { ws.close(); return; }
+        console.log('[Voice] WebSocket connected');
+        setJoined(true);
+        setConnecting(false);
+        toast.success('Joined voice channel');
+        // Start heartbeat
+        heartbeatTimerRef.current = setInterval(() => {
+          if (ws.readyState === WebSocket.OPEN) {
+            try { ws.send(JSON.stringify({ type: 'pong' })); } catch(e) {}
+          }
+        }, 15000);
+      };
+
       ws.onmessage = (event) => {
+        if (!mountedRef.current) return;
         const data = JSON.parse(event.data);
 
+        if (data.type === 'ping') {
+          try { ws.send(JSON.stringify({ type: 'pong' })); } catch(e) {}
+          return;
+        }
+
         if (data.type === 'voice_presence') {
-          setVoiceUsers(data.users);
-          data.users.forEach(u => {
+          setVoiceUsers(data.users || []);
+          // Create peer connections with new users
+          (data.users || []).forEach(u => {
             if (u.user_id !== userId && !peersRef.current[u.user_id]) {
+              console.log(`[Voice] Creating peer for ${u.username}`);
               createPeer(u.user_id, true);
             }
           });
-        } else if (data.type === 'offer') {
-          const pc = createPeer(data.sender_id, false);
-          pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }));
-          pc.createAnswer().then(answer => {
-            pc.setLocalDescription(answer);
-            ws.send(JSON.stringify({
-              type: 'answer',
-              target_id: data.sender_id,
-              sdp: answer.sdp
-            }));
+          // Clean up peers for disconnected users
+          const currentUserIds = new Set((data.users || []).map(u => u.user_id));
+          Object.keys(peersRef.current).forEach(peerId => {
+            if (!currentUserIds.has(peerId)) {
+              console.log(`[Voice] Cleaning up peer for ${peerId}`);
+              try { peersRef.current[peerId].close(); } catch(e) {}
+              delete peersRef.current[peerId];
+              if (remoteAudiosRef.current[peerId]) {
+                try { remoteAudiosRef.current[peerId].pause(); } catch(e) {}
+                delete remoteAudiosRef.current[peerId];
+              }
+            }
           });
+        } else if (data.type === 'offer') {
+          console.log(`[Voice] Received offer from ${data.sender_id}`);
+          const pc = createPeer(data.sender_id, false);
+          pc.setRemoteDescription(new RTCSessionDescription({ type: 'offer', sdp: data.sdp }))
+            .then(() => pc.createAnswer({ offerToReceiveAudio: true }))
+            .then(answer => pc.setLocalDescription(answer))
+            .then(() => {
+              if (ws.readyState === WebSocket.OPEN) {
+                ws.send(JSON.stringify({
+                  type: 'answer',
+                  target_id: data.sender_id,
+                  sdp: pc.localDescription.sdp
+                }));
+              }
+            })
+            .catch(err => console.error('[Voice] Answer error:', err));
         } else if (data.type === 'answer') {
+          console.log(`[Voice] Received answer from ${data.sender_id}`);
           const pc = peersRef.current[data.sender_id];
-          if (pc) pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
+          if (pc && pc.signalingState === 'have-local-offer') {
+            pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }))
+              .catch(err => console.error('[Voice] Set remote desc error:', err));
+          }
         } else if (data.type === 'ice_candidate') {
           const pc = peersRef.current[data.sender_id];
           if (pc && data.candidate) {
-            pc.addIceCandidate(new RTCIceCandidate(data.candidate));
+            pc.addIceCandidate(new RTCIceCandidate(data.candidate))
+              .catch(err => console.error('[Voice] ICE candidate error:', err));
           }
         } else if (data.type === 'speaking') {
           setSpeakingUsers(prev => ({ ...prev, [data.sender_id]: data.speaking }));
         }
       };
 
-      ws.onclose = () => {
-        cleanup();
-        setJoined(false);
+      ws.onerror = (err) => {
+        console.error('[Voice] WebSocket error:', err);
+        setConnecting(false);
       };
 
-      setJoined(true);
+      ws.onclose = () => {
+        console.log('[Voice] WebSocket closed');
+        if (mountedRef.current) {
+          cleanup();
+          setJoined(false);
+          setConnecting(false);
+        }
+      };
     } catch (err) {
-      console.error('Failed to join voice:', err);
+      console.error('[Voice] Failed to join:', err);
+      toast.error('Failed to access microphone. Please allow mic permission.');
+      setConnecting(false);
+      cleanup();
     }
   };
 
   const leaveVoice = () => {
     cleanup();
     setJoined(false);
+    toast.success('Left voice channel');
   };
 
   const toggleMute = () => {
@@ -173,10 +293,6 @@ export function VoicePanel({ roomId, token, userId, username }) {
       }
     }
   };
-
-  useEffect(() => {
-    return cleanup;
-  }, [cleanup]);
 
   return (
     <div className="flex flex-col h-full" data-testid="voice-panel">
@@ -208,7 +324,9 @@ export function VoicePanel({ roomId, token, userId, username }) {
                 >
                   {u.username?.[0]?.toUpperCase() || '?'}
                 </div>
-                <span className="text-sm truncate flex-1">{u.username}</span>
+                <span className="text-sm truncate flex-1">
+                  {u.username}{u.user_id === userId ? ' (you)' : ''}
+                </span>
                 {u.user_id === userId && muted && (
                   <MicOff className="w-3.5 h-3.5 text-[#EF4444]" strokeWidth={1.5} />
                 )}
@@ -254,10 +372,15 @@ export function VoicePanel({ roomId, token, userId, username }) {
           <Button
             data-testid="join-voice-button"
             onClick={joinVoice}
+            disabled={connecting}
             className="w-full h-9 text-xs bg-[#10B981] hover:bg-[#10B981]/90 text-white transition-all active:scale-[0.98]"
           >
-            <Phone className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.5} />
-            Join Voice
+            {connecting ? (
+              <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin mr-1.5" />
+            ) : (
+              <Phone className="w-3.5 h-3.5 mr-1.5" strokeWidth={1.5} />
+            )}
+            {connecting ? 'Connecting...' : 'Join Voice'}
           </Button>
         )}
       </div>

@@ -15,12 +15,13 @@ import {
 import { Separator } from '../components/ui/separator';
 import {
   Code2, ArrowLeft, Sparkles, PanelRightOpen, PanelRightClose,
-  Crown, Pencil, Eye, Loader2, Copy, Check
+  Crown, Pencil, Eye, Loader2, Copy, Check, Wifi, WifiOff
 } from 'lucide-react';
 import { toast } from 'sonner';
 import axios from 'axios';
 
 const API = `${process.env.REACT_APP_BACKEND_URL}/api`;
+const WS_BASE = process.env.REACT_APP_BACKEND_URL.replace(/^http/, 'ws');
 
 export default function EditorRoom() {
   const { roomId } = useParams();
@@ -36,13 +37,22 @@ export default function EditorRoom() {
   const [rightPanelOpen, setRightPanelOpen] = useState(true);
   const [aiLoading, setAiLoading] = useState(false);
   const [copied, setCopied] = useState(false);
+  const [wsConnected, setWsConnected] = useState(false);
 
   const wsRef = useRef(null);
   const codeRef = useRef(code);
-  const isRemoteUpdate = useRef(false);
+  // Track the last code received from remote to avoid echo loops
+  const remoteCodeRef = useRef('');
+  const reconnectTimer = useRef(null);
+  const heartbeatTimer = useRef(null);
+  const mountedRef = useRef(true);
 
-  // Keep codeRef in sync
   useEffect(() => { codeRef.current = code; }, [code]);
+  
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const fetchRoom = useCallback(async () => {
     try {
@@ -61,45 +71,100 @@ export default function EditorRoom() {
 
   useEffect(() => { fetchRoom(); }, [fetchRoom]);
 
-  // WebSocket for real-time editing
-  useEffect(() => {
-    if (!roomId || !token) return;
-    const wsUrl = process.env.REACT_APP_BACKEND_URL.replace(/^http/, 'ws');
-    const ws = new WebSocket(`${wsUrl}/api/ws/editor/${roomId}?token=${token}`);
+  // WebSocket connection with reconnection logic
+  const connectWs = useCallback(() => {
+    if (!roomId || !token || !mountedRef.current) return;
+    
+    // Clean up existing connection
+    if (wsRef.current) {
+      try { wsRef.current.close(); } catch(e) {}
+      wsRef.current = null;
+    }
+    
+    const ws = new WebSocket(`${WS_BASE}/api/ws/editor/${roomId}?token=${token}`);
     wsRef.current = ws;
 
+    ws.onopen = () => {
+      if (!mountedRef.current) { ws.close(); return; }
+      setWsConnected(true);
+      // Clear any pending reconnect
+      if (reconnectTimer.current) {
+        clearTimeout(reconnectTimer.current);
+        reconnectTimer.current = null;
+      }
+      // Start client-side heartbeat to keep connection alive through K8s ingress
+      if (heartbeatTimer.current) clearInterval(heartbeatTimer.current);
+      heartbeatTimer.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          try { ws.send(JSON.stringify({ type: 'pong' })); } catch(e) {}
+        }
+      }, 15000);
+    };
+
     ws.onmessage = (event) => {
+      if (!mountedRef.current) return;
       const data = JSON.parse(event.data);
+      
+      if (data.type === 'ping') {
+        // Respond to keepalive pings from server
+        try { ws.send(JSON.stringify({ type: 'pong' })); } catch(e) {}
+        return;
+      }
+      
       if (data.type === 'init') {
-        setCode(data.code || '');
+        const initCode = data.code || '';
+        remoteCodeRef.current = initCode;
+        setCode(initCode);
         setLanguage(data.language || 'javascript');
         setMyRole(data.role);
       } else if (data.type === 'code_change') {
-        isRemoteUpdate.current = true;
-        setCode(data.code);
+        const remoteCode = data.code || '';
+        remoteCodeRef.current = remoteCode;
+        setCode(remoteCode);
       } else if (data.type === 'language_change') {
         setLanguage(data.language);
       } else if (data.type === 'presence') {
-        setOnlineUsers(data.users);
+        setOnlineUsers(data.users || []);
       }
     };
 
-    ws.onerror = () => toast.error('Connection error');
-    ws.onclose = () => {};
+    ws.onerror = (err) => {
+      console.error('WebSocket error:', err);
+    };
 
-    return () => {
-      if (ws.readyState === WebSocket.OPEN) ws.close();
+    ws.onclose = () => {
+      if (!mountedRef.current) return;
+      setWsConnected(false);
+      if (heartbeatTimer.current) { clearInterval(heartbeatTimer.current); heartbeatTimer.current = null; }
+      // Auto-reconnect after 2 seconds
+      reconnectTimer.current = setTimeout(() => {
+        if (mountedRef.current) {
+          connectWs();
+        }
+      }, 2000);
     };
   }, [roomId, token]);
 
+  useEffect(() => {
+    connectWs();
+    return () => {
+      mountedRef.current = false;
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+      if (heartbeatTimer.current) clearInterval(heartbeatTimer.current);
+      if (wsRef.current) {
+        try { wsRef.current.close(); } catch(e) {}
+        wsRef.current = null;
+      }
+    };
+  }, [connectWs]);
+
   const handleCodeChange = useCallback((newCode) => {
-    if (isRemoteUpdate.current) {
-      isRemoteUpdate.current = false;
-      return;
-    }
     setCode(newCode);
-    if (wsRef.current?.readyState === WebSocket.OPEN && myRole !== 'viewer') {
-      wsRef.current.send(JSON.stringify({ type: 'code_change', code: newCode }));
+    // Only send if different from the last remote update (prevents echo loops)
+    if (newCode !== remoteCodeRef.current) {
+      if (wsRef.current?.readyState === WebSocket.OPEN && myRole !== 'viewer') {
+        wsRef.current.send(JSON.stringify({ type: 'code_change', code: newCode }));
+      }
     }
   }, [myRole]);
 
@@ -122,6 +187,7 @@ export default function EditorRoom() {
         const suggestion = res.data.suggestion;
         const newCode = codeRef.current + '\n\n// === AI Suggestion ===\n' + suggestion;
         setCode(newCode);
+        remoteCodeRef.current = ''; // Force send
         if (wsRef.current?.readyState === WebSocket.OPEN && myRole !== 'viewer') {
           wsRef.current.send(JSON.stringify({ type: 'code_change', code: newCode }));
         }
@@ -141,8 +207,7 @@ export default function EditorRoom() {
     toast.success('Code copied!');
   };
 
-  const roleIcon = myRole === 'owner' ? Crown : myRole === 'editor' ? Pencil : Eye;
-  const RoleIcon = roleIcon;
+  const RoleIcon = myRole === 'owner' ? Crown : myRole === 'editor' ? Pencil : Eye;
   const roleColor = myRole === 'owner' ? '#FF3B30' : myRole === 'editor' ? '#007AFF' : '#A1A1AA';
 
   if (loading) {
@@ -184,7 +249,7 @@ export default function EditorRoom() {
 
           <Badge
             variant="outline"
-            className={`text-[10px] font-medium border ml-2`}
+            className="text-[10px] font-medium border ml-2"
             style={{ borderColor: `${roleColor}33`, color: roleColor, backgroundColor: `${roleColor}15` }}
             data-testid="my-role-badge"
           >
@@ -321,6 +386,16 @@ export default function EditorRoom() {
 
         {/* Status Bar */}
         <footer className="h-7 bg-[#121214] border-t border-white/5 flex items-center px-4 gap-4 shrink-0">
+          <div className="flex items-center gap-1.5">
+            {wsConnected ? (
+              <Wifi className="w-3 h-3 text-[#10B981]" strokeWidth={1.5} />
+            ) : (
+              <WifiOff className="w-3 h-3 text-[#EF4444]" strokeWidth={1.5} />
+            )}
+            <span className={`text-[10px] ${wsConnected ? 'text-[#10B981]' : 'text-[#EF4444]'}`}>
+              {wsConnected ? 'Connected' : 'Reconnecting...'}
+            </span>
+          </div>
           <span className="text-[10px] text-[#52525B] uppercase tracking-wider">
             {language}
           </span>

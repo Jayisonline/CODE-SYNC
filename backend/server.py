@@ -5,6 +5,7 @@ from motor.motor_asyncio import AsyncIOMotorClient
 import os
 import logging
 import json
+import asyncio
 from pathlib import Path
 from pydantic import BaseModel, Field
 from typing import List, Optional, Dict
@@ -237,97 +238,176 @@ async def ai_suggest(data: AIRequest, token: str = Query(...)):
         logger.error(f"AI suggestion error: {e}")
         raise HTTPException(status_code=500, detail=f"AI service error: {str(e)}")
 
-# ─── WebSocket Connection Manager ────────────────────────
+# ─── WebSocket Connection Manager (Fixed Race Condition) ──
 class EditorConnectionManager:
+    """Manages editor WebSocket connections with instance-level tracking
+    to prevent race conditions from React StrictMode double-mounts."""
+    
     def __init__(self):
-        self.rooms: Dict[str, Dict[str, dict]] = {}
+        # rooms[room_id][user_id] = list of {ws, username, role, conn_id}
+        self.rooms: Dict[str, Dict[str, list]] = {}
 
-    async def connect(self, room_id: str, user_id: str, username: str, role: str, ws: WebSocket):
+    async def connect(self, room_id: str, user_id: str, username: str, role: str, ws: WebSocket, conn_id: str):
         await ws.accept()
         if room_id not in self.rooms:
             self.rooms[room_id] = {}
-        self.rooms[room_id][user_id] = {"ws": ws, "username": username, "role": role}
+        if user_id not in self.rooms[room_id]:
+            self.rooms[room_id][user_id] = []
+        # Add this specific connection
+        self.rooms[room_id][user_id].append({
+            "ws": ws, "username": username, "role": role, "conn_id": conn_id
+        })
+        logger.info(f"[Editor] Connected: room={room_id} user={username} conn={conn_id} (total conns for user: {len(self.rooms[room_id][user_id])})")
         await self.broadcast_presence(room_id)
 
-    def disconnect(self, room_id: str, user_id: str):
-        if room_id in self.rooms:
-            self.rooms[room_id].pop(user_id, None)
-            if not self.rooms[room_id]:
-                del self.rooms[room_id]
+    def disconnect(self, room_id: str, user_id: str, conn_id: str):
+        """Only remove the specific connection instance, not all connections for the user."""
+        if room_id not in self.rooms or user_id not in self.rooms[room_id]:
+            return
+        conns = self.rooms[room_id][user_id]
+        self.rooms[room_id][user_id] = [c for c in conns if c["conn_id"] != conn_id]
+        logger.info(f"[Editor] Disconnected: room={room_id} user_id={user_id} conn={conn_id} (remaining: {len(self.rooms[room_id][user_id])})")
+        if not self.rooms[room_id][user_id]:
+            del self.rooms[room_id][user_id]
+        if not self.rooms[room_id]:
+            del self.rooms[room_id]
+
+    def get_active_users(self, room_id: str):
+        if room_id not in self.rooms:
+            return []
+        users = []
+        seen = set()
+        for user_id, conns in self.rooms[room_id].items():
+            if conns and user_id not in seen:
+                seen.add(user_id)
+                users.append({
+                    "user_id": user_id,
+                    "username": conns[0]["username"],
+                    "role": conns[0]["role"]
+                })
+        return users
 
     async def broadcast_presence(self, room_id: str):
-        if room_id not in self.rooms:
-            return
-        users = [{"user_id": uid, "username": c["username"], "role": c["role"]}
-                 for uid, c in self.rooms[room_id].items()]
+        users = self.get_active_users(room_id)
         msg = json.dumps({"type": "presence", "users": users})
-        for uid, c in list(self.rooms[room_id].items()):
-            try:
-                await c["ws"].send_text(msg)
-            except Exception:
-                pass
+        await self._send_to_all(room_id, msg)
 
-    async def broadcast_code(self, room_id: str, sender_id: str, data: dict):
+    async def broadcast_code(self, room_id: str, sender_id: str, sender_conn_id: str, data: dict):
         if room_id not in self.rooms:
             return
         msg = json.dumps({**data, "sender_id": sender_id})
-        for uid, c in list(self.rooms[room_id].items()):
-            if uid != sender_id:
+        for user_id, conns in list(self.rooms[room_id].items()):
+            for conn in list(conns):
+                # Send to everyone except the specific sender connection
+                if conn["conn_id"] == sender_conn_id:
+                    continue
                 try:
-                    await c["ws"].send_text(msg)
+                    await conn["ws"].send_text(msg)
+                except Exception as e:
+                    logger.debug(f"[Editor] Send failed to {user_id}: {e}")
+
+    async def _send_to_all(self, room_id: str, msg: str):
+        if room_id not in self.rooms:
+            return
+        for user_id, conns in list(self.rooms[room_id].items()):
+            for conn in list(conns):
+                try:
+                    await conn["ws"].send_text(msg)
                 except Exception:
                     pass
 
-class VoiceConnectionManager:
-    def __init__(self):
-        self.rooms: Dict[str, Dict[str, dict]] = {}
 
-    async def connect(self, room_id: str, user_id: str, username: str, ws: WebSocket):
+class VoiceConnectionManager:
+    """Manages voice WebSocket connections with instance-level tracking."""
+    
+    def __init__(self):
+        self.rooms: Dict[str, Dict[str, list]] = {}
+
+    async def connect(self, room_id: str, user_id: str, username: str, ws: WebSocket, conn_id: str):
         await ws.accept()
         if room_id not in self.rooms:
             self.rooms[room_id] = {}
-        self.rooms[room_id][user_id] = {"ws": ws, "username": username}
+        if user_id not in self.rooms[room_id]:
+            self.rooms[room_id][user_id] = []
+        self.rooms[room_id][user_id].append({
+            "ws": ws, "username": username, "conn_id": conn_id
+        })
+        logger.info(f"[Voice] Connected: room={room_id} user={username} conn={conn_id}")
         await self.broadcast_voice_presence(room_id)
 
-    def disconnect(self, room_id: str, user_id: str):
-        if room_id in self.rooms:
-            self.rooms[room_id].pop(user_id, None)
-            if not self.rooms[room_id]:
-                del self.rooms[room_id]
+    def disconnect(self, room_id: str, user_id: str, conn_id: str):
+        if room_id not in self.rooms or user_id not in self.rooms[room_id]:
+            return
+        conns = self.rooms[room_id][user_id]
+        self.rooms[room_id][user_id] = [c for c in conns if c["conn_id"] != conn_id]
+        logger.info(f"[Voice] Disconnected: room={room_id} user_id={user_id} conn={conn_id}")
+        if not self.rooms[room_id][user_id]:
+            del self.rooms[room_id][user_id]
+        if not self.rooms[room_id]:
+            del self.rooms[room_id]
+
+    def get_active_users(self, room_id: str):
+        if room_id not in self.rooms:
+            return []
+        users = []
+        seen = set()
+        for user_id, conns in self.rooms[room_id].items():
+            if conns and user_id not in seen:
+                seen.add(user_id)
+                users.append({"user_id": user_id, "username": conns[0]["username"]})
+        return users
 
     async def broadcast_voice_presence(self, room_id: str):
-        if room_id not in self.rooms:
-            return
-        users = [{"user_id": uid, "username": c["username"]}
-                 for uid, c in self.rooms[room_id].items()]
+        users = self.get_active_users(room_id)
         msg = json.dumps({"type": "voice_presence", "users": users})
-        for uid, c in list(self.rooms[room_id].items()):
-            try:
-                await c["ws"].send_text(msg)
-            except Exception:
-                pass
+        await self._send_to_all(room_id, msg)
 
     async def relay(self, room_id: str, sender_id: str, target_id: str, data: dict):
-        if room_id in self.rooms and target_id in self.rooms[room_id]:
-            msg = json.dumps({**data, "sender_id": sender_id})
+        if room_id not in self.rooms or target_id not in self.rooms[room_id]:
+            return
+        msg = json.dumps({**data, "sender_id": sender_id})
+        for conn in list(self.rooms[room_id][target_id]):
             try:
-                await self.rooms[room_id][target_id]["ws"].send_text(msg)
+                await conn["ws"].send_text(msg)
             except Exception:
                 pass
 
-    async def broadcast(self, room_id: str, sender_id: str, data: dict):
+    async def broadcast(self, room_id: str, sender_id: str, sender_conn_id: str, data: dict):
         if room_id not in self.rooms:
             return
         msg = json.dumps({**data, "sender_id": sender_id})
-        for uid, c in list(self.rooms[room_id].items()):
-            if uid != sender_id:
+        for user_id, conns in list(self.rooms[room_id].items()):
+            for conn in list(conns):
+                if conn["conn_id"] == sender_conn_id:
+                    continue
                 try:
-                    await c["ws"].send_text(msg)
+                    await conn["ws"].send_text(msg)
                 except Exception:
                     pass
+
+    async def _send_to_all(self, room_id: str, msg: str):
+        if room_id not in self.rooms:
+            return
+        for user_id, conns in list(self.rooms[room_id].items()):
+            for conn in list(conns):
+                try:
+                    await conn["ws"].send_text(msg)
+                except Exception:
+                    pass
+
 
 editor_manager = EditorConnectionManager()
 voice_manager = VoiceConnectionManager()
+
+# ─── WebSocket Keepalive ──────────────────────────────────
+async def ws_keepalive(ws: WebSocket, interval: int = 20):
+    """Send periodic pings to keep the WebSocket connection alive through K8s ingress."""
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            await ws.send_text(json.dumps({"type": "ping"}))
+    except Exception:
+        pass
 
 # ─── WebSocket Endpoints ─────────────────────────────────
 @app.websocket("/api/ws/editor/{room_id}")
@@ -349,42 +429,56 @@ async def editor_ws(ws: WebSocket, room_id: str, token: str = Query(...)):
     user_id = payload["user_id"]
     username = payload["username"]
     role = member["role"]
+    conn_id = str(uuid.uuid4())
 
-    await editor_manager.connect(room_id, user_id, username, role, ws)
+    await editor_manager.connect(room_id, user_id, username, role, ws, conn_id)
+    
+    # Start keepalive task
+    keepalive_task = asyncio.create_task(ws_keepalive(ws))
+    
     try:
+        # Send initial state - fetch fresh from DB
+        fresh_room = await db.rooms.find_one({"id": room_id}, {"_id": 0})
         await ws.send_text(json.dumps({
             "type": "init",
-            "code": room["code"],
-            "language": room["language"],
+            "code": fresh_room["code"] if fresh_room else room["code"],
+            "language": fresh_room["language"] if fresh_room else room["language"],
             "role": role
         }))
+        
         while True:
             raw = await ws.receive_text()
             data = json.loads(raw)
-            if data["type"] == "code_change" and role in ("owner", "editor"):
+            
+            if data.get("type") == "pong":
+                continue
+            elif data.get("type") == "code_change" and role in ("owner", "editor"):
+                code_content = data.get("code", "")
                 await db.rooms.update_one(
                     {"id": room_id},
-                    {"$set": {"code": data["code"], "updated_at": datetime.now(timezone.utc).isoformat()}}
+                    {"$set": {"code": code_content, "updated_at": datetime.now(timezone.utc).isoformat()}}
                 )
-                await editor_manager.broadcast_code(room_id, user_id, data)
-            elif data["type"] == "cursor_move":
-                await editor_manager.broadcast_code(room_id, user_id, {
+                await editor_manager.broadcast_code(room_id, user_id, conn_id, data)
+                logger.info(f"[Editor] Code change from {username} in room {room_id} (len={len(code_content)})")
+            elif data.get("type") == "cursor_move":
+                await editor_manager.broadcast_code(room_id, user_id, conn_id, {
                     "type": "cursor_move",
-                    "cursor": data["cursor"],
+                    "cursor": data.get("cursor"),
                     "username": username
                 })
-            elif data["type"] == "language_change" and role in ("owner", "editor"):
+            elif data.get("type") == "language_change" and role in ("owner", "editor"):
                 await db.rooms.update_one(
                     {"id": room_id},
-                    {"$set": {"language": data["language"]}}
+                    {"$set": {"language": data.get("language")}}
                 )
-                await editor_manager.broadcast_code(room_id, user_id, data)
+                await editor_manager.broadcast_code(room_id, user_id, conn_id, data)
     except WebSocketDisconnect:
-        pass
+        logger.info(f"[Editor] WebSocket disconnected: {username} conn={conn_id}")
     except Exception as e:
-        logger.error(f"Editor WS error: {e}")
+        logger.error(f"[Editor] WS error for {username}: {e}")
     finally:
-        editor_manager.disconnect(room_id, user_id)
+        keepalive_task.cancel()
+        editor_manager.disconnect(room_id, user_id, conn_id)
         await editor_manager.broadcast_presence(room_id)
 
 @app.websocket("/api/ws/voice/{room_id}")
@@ -405,30 +499,40 @@ async def voice_ws(ws: WebSocket, room_id: str, token: str = Query(...)):
 
     user_id = payload["user_id"]
     username = payload["username"]
+    conn_id = str(uuid.uuid4())
 
-    await voice_manager.connect(room_id, user_id, username, ws)
+    await voice_manager.connect(room_id, user_id, username, ws, conn_id)
+    
+    # Start keepalive task
+    keepalive_task = asyncio.create_task(ws_keepalive(ws))
+    
     try:
         while True:
             raw = await ws.receive_text()
             data = json.loads(raw)
-            if data["type"] in ("offer", "answer", "ice_candidate"):
+            
+            if data.get("type") == "pong":
+                continue
+            elif data.get("type") in ("offer", "answer", "ice_candidate"):
                 target = data.get("target_id")
                 if target:
                     await voice_manager.relay(room_id, user_id, target, data)
                 else:
-                    await voice_manager.broadcast(room_id, user_id, data)
-            elif data["type"] == "speaking":
-                await voice_manager.broadcast(room_id, user_id, {
+                    await voice_manager.broadcast(room_id, user_id, conn_id, data)
+                logger.info(f"[Voice] Signal {data['type']} from {username} target={target or 'broadcast'}")
+            elif data.get("type") == "speaking":
+                await voice_manager.broadcast(room_id, user_id, conn_id, {
                     "type": "speaking",
-                    "speaking": data["speaking"],
+                    "speaking": data.get("speaking", False),
                     "username": username
                 })
     except WebSocketDisconnect:
-        pass
+        logger.info(f"[Voice] WebSocket disconnected: {username} conn={conn_id}")
     except Exception as e:
-        logger.error(f"Voice WS error: {e}")
+        logger.error(f"[Voice] WS error for {username}: {e}")
     finally:
-        voice_manager.disconnect(room_id, user_id)
+        keepalive_task.cancel()
+        voice_manager.disconnect(room_id, user_id, conn_id)
         await voice_manager.broadcast_voice_presence(room_id)
 
 # ─── Helpers ─────────────────────────────────────────────
