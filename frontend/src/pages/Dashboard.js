@@ -6,7 +6,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Badge } from '../components/ui/badge';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription
 } from '../components/ui/dialog';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
@@ -137,6 +137,7 @@ export default function Dashboard() {
             <DialogContent className="glass-heavy border-white/10 sm:max-w-md" data-testid="create-room-dialog">
               <DialogHeader>
                 <DialogTitle className="heading-font text-xl font-bold">Create Room</DialogTitle>
+                <DialogDescription className="text-sm text-[#A1A1AA]">Set up a new collaborative coding room</DialogDescription>
               </DialogHeader>
               <form onSubmit={createRoom} className="flex flex-col gap-5 mt-2">
                 <div>

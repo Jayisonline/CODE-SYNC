@@ -6,7 +6,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { ScrollArea } from '../components/ui/scroll-area';
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger, DialogDescription
 } from '../components/ui/dialog';
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue
@@ -103,6 +103,7 @@ export function UserPresence({ roomId, token, members, onlineUsers, myRole, onMe
             <DialogContent className="glass-heavy border-white/10 sm:max-w-sm" data-testid="invite-dialog">
               <DialogHeader>
                 <DialogTitle className="heading-font text-lg font-bold">Invite Member</DialogTitle>
+                <DialogDescription className="text-sm text-[#A1A1AA]">Add a collaborator to this room</DialogDescription>
               </DialogHeader>
               <form onSubmit={inviteUser} className="flex flex-col gap-4 mt-2">
                 <div>
