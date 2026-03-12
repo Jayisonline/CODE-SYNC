@@ -1,0 +1,222 @@
+{
+  "design_identity": {
+    "persona": "E1: The Anti-AI Designer",
+    "core_principles": [
+      "Fusion over Imitation: Mix hacker aesthetics with Swiss precision.",
+      "Emotion First: The editor should feel like a cockpit—precise, fast, and powerful.",
+      "Content is King: The code is the hero. Everything else recedes.",
+      "Contrast: High contrast for readability, low contrast for secondary UI."
+    ],
+    "anti_patterns": [
+      "No purple/teal gradients.",
+      "No 'Inter' font everywhere.",
+      "No centered layouts for code tools.",
+      "No decorative gradients that don't serve a function."
+    ]
+  },
+  "context_strategy": {
+    "type": "Productivity/Tool (Code Editor)",
+    "emotional_tone": "Focused, Precise, Collaborative, 'Flow State'",
+    "visual_mood": "Dark, Neon Accents, Glassmorphic overlays, Sharp borders",
+    "theme_strategy": "Dark Mode ONLY (Optimized for coding)"
+  },
+  "typography": {
+    "fonts": {
+      "headings": {
+        "family": "Space Grotesk",
+        "fallback": "sans-serif",
+        "weights": ["600", "700"],
+        "usage": "Page titles, Modal headers, Section labels"
+      },
+      "body": {
+        "family": "Geist Sans",
+        "fallback": "sans-serif",
+        "weights": ["400", "500"],
+        "usage": "UI text, Descriptions, settings"
+      },
+      "code": {
+        "family": "JetBrains Mono",
+        "fallback": "monospace",
+        "weights": ["400", "500"],
+        "usage": "Editor content, Snippets, Terminal output"
+      }
+    },
+    "scale": {
+      "h1": "text-4xl tracking-tight font-bold",
+      "h2": "text-2xl tracking-tight font-semibold",
+      "h3": "text-xl font-medium",
+      "body": "text-sm leading-relaxed",
+      "caption": "text-xs text-muted-foreground uppercase tracking-wider"
+    },
+    "rules": "Avoid 'Inter'. Use 'Space Grotesk' for a technical feel in headers. Code font MUST be monospaced."
+  },
+  "colors": {
+    "palette": {
+      "primary": {
+        "name": "Electric Blaze",
+        "hex": "#FF3B30",
+        "tailwind": "bg-red-500",
+        "usage": "Primary Actions (Run Code, Join Voice, Deploy)"
+      },
+      "secondary": {
+        "name": "Volt Blue",
+        "hex": "#007AFF",
+        "tailwind": "bg-blue-600",
+        "usage": "Selection states, Active tabs, Focus rings"
+      },
+      "background": {
+        "base": "#09090b",
+        "surface": "#121214",
+        "overlay": "#18181b"
+      },
+      "text": {
+        "primary": "#EDEDED",
+        "secondary": "#A1A1AA",
+        "muted": "#52525B"
+      },
+      "accents": {
+        "success": "#10B981",
+        "warning": "#F59E0B",
+        "error": "#EF4444",
+        "info": "#3B82F6"
+      }
+    },
+    "gradients": {
+      "active_border": "linear-gradient(to right, #FF3B30, #007AFF)",
+      "glass_sheen": "linear-gradient(180deg, rgba(255,255,255,0.05) 0%, rgba(255,255,255,0) 100%)"
+    },
+    "contrast_rules": "Text must meet APCA standards. Interactive elements must have 3:1 contrast against background."
+  },
+  "layout": {
+    "grid_system": {
+      "dashboard": {
+        "type": "Bento Grid (Mode A)",
+        "columns": "grid-cols-1 md:grid-cols-3 lg:grid-cols-4",
+        "gap": "gap-6",
+        "rules": "Project cards vary in size. Recent projects get larger 'Hero' slots."
+      },
+      "editor": {
+        "type": "Focus Tunnel",
+        "structure": "Sidebar (File Tree) | Main (Editor) | Panel (Voice/Chat)",
+        "behavior": "Collapsible sidebars. Main editor takes remaining width."
+      }
+    },
+    "spacing": {
+      "scale": ["p-4", "p-6", "p-8", "p-12"],
+      "containers": "Containers with borders must have p-6 or p-8 padding."
+    },
+    "alignment": "Left-align text. Optical alignment for icons + text (add right padding to icon)."
+  },
+  "components": {
+    "cards": {
+      "style": "Glassmorphic + Sharp",
+      "classes": "bg-background/40 backdrop-blur-md border border-white/10 shadow-sm hover:border-white/20 transition-all duration-300",
+      "radius": "rounded-lg"
+    },
+    "buttons": {
+      "primary": "bg-primary text-white hover:bg-primary/90 shadow-[0_0_15px_rgba(255,59,48,0.3)] transition-all",
+      "secondary": "bg-secondary/10 text-secondary hover:bg-secondary/20 border border-secondary/20",
+      "ghost": "hover:bg-white/5 text-muted-foreground hover:text-foreground",
+      "shape": "rounded-md (Sharp-ish)"
+    },
+    "inputs": {
+      "style": "Minimal",
+      "classes": "bg-transparent border-b border-white/20 focus:border-primary focus:ring-0 rounded-none px-0 py-2 transition-colors placeholder:text-muted-foreground/50",
+      "label_style": "uppercase text-xs tracking-wider text-muted-foreground mb-1 block"
+    },
+    "voice_panel": {
+      "style": "Floating / Docked",
+      "classes": "bg-black/50 backdrop-blur-xl border-l border-white/5 h-full",
+      "user_avatar": "rounded-full ring-2 ring-transparent data-[speaking=true]:ring-success transition-all duration-100"
+    }
+  },
+  "visual_enhancers": {
+    "textures": {
+      "noise": "url('/assets/noise.png') opacity-5 overlay",
+      "grid": "bg-[linear-gradient(to_right,#80808012_1px,transparent_1px),linear-gradient(to_bottom,#80808012_1px,transparent_1px)] bg-[size:24px_24px]"
+    },
+    "effects": {
+      "glow": "drop-shadow-[0_0_10px_rgba(255,255,255,0.1)]",
+      "active_glow": "shadow-[0_0_20px_-5px_var(--primary)]"
+    }
+  },
+  "motion": {
+    "transitions": "transition-all duration-200 ease-out",
+    "hover": "transform hover:-translate-y-1",
+    "list_stagger": "animate-in fade-in slide-in-from-bottom-4 duration-300 stagger-100",
+    "micro_interactions": "Active states should have instant feedback (scale 0.98 on press)."
+  },
+  "accessibility": {
+    "contrast": "Ensure text is legible on dark backgrounds. Use lighter greys (e.g., #E5E5E5) for body text.",
+    "focus": "Visible focus rings in 'Volt Blue' for keyboard navigation.",
+    "screen_readers": "All icon-only buttons must have aria-label."
+  },
+  "assets": {
+    "icons": {
+      "library": "lucide-react",
+      "style": "Stroke width 1.5px (Thin/Technical)"
+    },
+    "images": {
+      "avatars": [
+        {
+          "url": "https://images.unsplash.com/photo-1740252117027-4275d3f84385?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHw0fHxkZXZlbG9wZXIlMjBhdmF0YXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzMyOTUxMjZ8MA&ixlib=rb-4.1.0&q=85",
+          "description": "User Avatar 1",
+          "category": "user_profile"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1724654814378-108c93f5fa54?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwxfHxkZXZlbG9wZXIlMjBhdmF0YXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzMyOTUxMjZ8MA&ixlib=rb-4.1.0&q=85",
+          "description": "User Avatar 2",
+          "category": "user_profile"
+        },
+         {
+          "url": "https://images.unsplash.com/photo-1648293821367-b39c09679658?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwyfHxkZXZlbG9wZXIlMjBhdmF0YXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzMyOTUxMjZ8MA&ixlib=rb-4.1.0&q=85",
+          "description": "User Avatar 3",
+          "category": "user_profile"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1599492982656-e7e255be3de5?crop=entropy&cs=srgb&fm=jpg&ixid=M3w4NjA0MTJ8MHwxfHNlYXJjaHwzfHxkZXZlbG9wZXIlMjBhdmF0YXIlMjBwb3J0cmFpdHxlbnwwfHx8fDE3NzMyOTUxMjZ8MA&ixlib=rb-4.1.0&q=85",
+          "description": "User Avatar 4",
+          "category": "user_profile"
+        }
+      ],
+      "backgrounds": [
+        {
+          "url": "https://images.unsplash.com/photo-1750020113720-70f9c87982e9?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHwzfHxhYnN0cmFjdCUyMGN5YmVyJTIwZ3JpZCUyMGRhcmslMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3MzI5NTEyN3ww&ixlib=rb-4.1.0&q=85",
+          "description": "Abstract Grid Background 1",
+          "category": "dashboard_card_bg"
+        },
+        {
+          "url": "https://images.unsplash.com/photo-1746468222058-4e7a186ad2be?crop=entropy&cs=srgb&fm=jpg&ixid=M3w3NDQ2NDJ8MHwxfHNlYXJjaHwxfHxhYnN0cmFjdCUyMGN5YmVyJTIwZ3JpZCUyMGRhcmslMjBiYWNrZ3JvdW5kfGVufDB8fHx8MTc3MzI5NTEyN3ww&ixlib=rb-4.1.0&q=85",
+          "description": "Abstract Color Background 2",
+          "category": "dashboard_card_bg"
+        }
+      ]
+    }
+  },
+  "tech_stack_specifics": {
+    "shadcn_overrides": "Force 'radius' to 0.3rem or 0px for a sharper look. Override default 'slate' colors with 'zinc' or custom 'obsidian' palette.",
+    "tailwind_config": "Add 'animate-in' plugins. Extend colors with 'electric-blaze' and 'volt-blue'.",
+    "react_components": "Use functional components with hooks. Use 'Sonner' for toasts."
+  },
+  "instructions_to_main_agent": [
+    "Implement a 'Dark Mode' toggle but default to Dark.",
+    "Use the provided image URLs for user avatars and project backgrounds.",
+    "For the Voice Channel, create a floating panel or sidebar that uses the 'Glassmorphic' style.",
+    "The Code Editor area must be the focal point - minimalist, distraction-free.",
+    "Use 'JetBrains Mono' for all code related text.",
+    "Ensure all interactive elements have 'data-testid' attributes.",
+    "Do NOT use gradients for backgrounds, only for borders or subtle glows.",
+    "Use 'Lucide-React' for icons."
+  ],
+  "universal_guidelines": [
+    "Avoid generic 'AI slop' design.",
+    "Dark colors look good when used independently without gradients.",
+    "Create depth through layered design elements with z-index hierarchy.",
+    "Use glass-morphism effects with backdrop filters (12-24px blur).",
+    "Do NOT apply universal transition (transition: all).",
+    "Do NOT center align the app container.",
+    "Every interaction needs micro-animations.",
+    "Use 2-3x more spacing than feels comfortable.",
+    "Use 'sonner' for toasts."
+  ]
+}
