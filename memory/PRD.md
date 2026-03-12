@@ -49,8 +49,20 @@ Build a collaborative code editor with audio features like Discord where users c
 
 ## Testing Results
 - Backend: 100% pass rate
-- Frontend: 95% pass rate (minor aria console warnings fixed)
+- Frontend: 95% pass rate (dev-only console warnings)
+- WebSocket Real-time Sync: 100% pass rate
 - Overall: 98% success
+
+## Bug Fixes (March 12, 2026 - Iteration 2)
+### Root Cause: WebSocket Race Condition
+- **Problem**: React StrictMode double-mount caused disconnect to remove the active 2nd connection
+- **Fix**: Connection manager now tracks individual WebSocket instances with `conn_id`; only removes the specific connection that disconnected
+### Root Cause: Code Sync Echo Loop
+- **Problem**: `isRemoteUpdate` flag had timing issues with React's async state batching
+- **Fix**: Replaced with `remoteCodeRef` comparison - only sends code if different from last remote update
+### Root Cause: K8s Ingress 60s Timeout
+- **Problem**: Kubernetes ingress terminated idle WebSocket connections after 60 seconds
+- **Fix**: Client-side heartbeat every 15s + server-side ping every 20s keeps connections alive
 
 ## Prioritized Backlog
 ### P0 (Critical)
